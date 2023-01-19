@@ -22,8 +22,10 @@ import math, cmath, random
 import numpy as np
 from math import pi
 from qiskit import QuantumCircuit, ClassicalRegister, QuantumRegister, execute, Aer
-from qiskit.circuit.library import QFT, HGate, XGate, UGate, SGate, ZGate
-
+from qiskit.circuit.library import QFT, HGate, XGate, UGate, SGate, ZGate, IGate
+from qiskit.circuit.random import random_circuit
+import itertools
+from pygrnd.qc.helper import *
 #
 # Turn a number into binary string representation with b bits.
 #
@@ -111,7 +113,10 @@ def constructGroverOperator(model, targets):
         lastBit=t[-1]
         if lastBit=='0':
             qc.x(qr[numberQubits-1])
-        qc.append(ZGate().control(num_ctrl_qubits=numberQubits-1,ctrl_state=t[:-1][::-1]),qr)
+        if numberQubits>1:
+            qc.append(ZGate().control(num_ctrl_qubits=numberQubits-1,ctrl_state=t[:-1][::-1]),qr)
+        else:
+            qc.z(qr[0])
         if lastBit=='0':
             qc.x(qr[numberQubits-1])
 
@@ -124,7 +129,10 @@ def constructGroverOperator(model, targets):
     qc.x(qr[0])
     qc.z(qr[0])
     qc.x(qr[0])
-    qc.append(ZGate().control(num_ctrl_qubits=numberQubits-1,ctrl_state='0'*(numberQubits-1)),qr[1:]+[qr[0]])
+    if numberQubits>1:
+        qc.append(ZGate().control(num_ctrl_qubits=numberQubits-1,ctrl_state='0'*(numberQubits-1)),qr[1:]+[qr[0]])
+    else:
+        qc.z(qr[0])
     qc.x(qr[0])
 
     # Normal operation
@@ -383,10 +391,32 @@ def circuitStandardQAE(eigenstatePreparation, groverOperator, precision):
 
     for i in range(precision):
         qc.h(qr[precision-i-1])
-        qc.append(groverOperator.power(2**i).control(),[qr[precision-i-1]]+qr[numberAllQubits-numberQubitsGroverOperator:])
+        qc.append(groverOperator.control().power(2**i),[qr[precision-i-1]]+qr[numberAllQubits-numberQubitsGroverOperator:])
     qc.append(QFT(precision,do_swaps=False).inverse(),qr[:precision])
 
     qc.measure(qr[:precision],cr)
+    return qc
+
+#
+# Standard QAE. Do not measure at the end.
+#
+def circuitStandardQAEnoMeasurement(eigenstatePreparation, groverOperator, precision):
+    numberQubitsGroverOperator=groverOperator.num_qubits
+    numberQubitsEP=eigenstatePreparation.num_qubits
+    numberAllQubits=numberQubitsEP+precision
+
+    if numberQubitsGroverOperator>numberQubitsEP:
+        print("Error: Register of Grover operator has more qubits than register of eigenstate preparation")
+
+    qr=QuantumRegister(numberAllQubits,"qr")
+    qc=QuantumCircuit(qr)
+    qc.append(eigenstatePreparation,qr[numberAllQubits-numberQubitsEP:])
+
+    for i in range(precision):
+        qc.h(qr[precision-i-1])
+        qc.append(groverOperator.control().power(2**i),[qr[precision-i-1]]+qr[numberAllQubits-numberQubitsGroverOperator:])
+    qc.append(QFT(precision,do_swaps=False).inverse(),qr[:precision])
+
     return qc
 
 #
@@ -448,3 +478,78 @@ def circuitStandardParallelQAEwithResets(eigenstatePreparation, groverOperator, 
 
     return qc
 
+
+def findSuitableModel(qubits, minProb, maxProb, numberStates):
+    """ Return a random circuit and a list of states. The states
+        have together a probability between minProb and maxProb.
+        The number of states can be predefined.
+    """
+    numberShots=10000
+    foundGoodStates=False
+    goodStates=0
+    goodModel=0
+
+    while not(foundGoodStates):
+        qc = random_circuit(qubits, qubits+5, measure=False)
+
+        # Remove id gates as they are useless and the controlled 
+        # version does not work. This would lead to problems when 
+        # creating the controlled Grover gate.
+        qr=qc.qubits
+        qc2=QuantumCircuit(qr)
+        for gate in qc:
+            if not(gate[0]==IGate()):
+                qc2.append(gate[0],gate[1])
+        modelGate=qc2.to_gate()
+        modelGate.label='m'
+
+        qr=QuantumRegister(qubits,'q')
+        cr=ClassicalRegister(qubits,'c')
+        qc=QuantumCircuit(qr,cr)
+        qc.append(modelGate,qr)
+        qc.measure(qr,cr)
+        backend = Aer.get_backend('qasm_simulator')
+
+        job = execute(qc, backend, shots=numberShots)
+        result=job.result()
+        counts=result.get_counts()
+        
+        # Check all subsets of size numberStates of possible combinations of results
+        # if we land in the desired region. Each relevant state should have at least 1
+        # hit to be relevant.
+        binaryWords=allBits(qubits)
+        
+        for combi in itertools.combinations(binaryWords, numberStates):
+            buffer=0
+            allStatesPopulated=True
+            for c in combi:
+                if c in counts:
+                    buffer=buffer+counts[c]/numberShots
+                else:
+                    allStatesPopulated=False
+
+            if buffer>minProb and buffer<maxProb and allStatesPopulated==True and len(counts)>(2**qubits-2):
+                foundGoodStates=True
+                goodStates=list(combi)
+                goodModel=modelGate
+                break
+
+    return goodModel, goodStates
+
+def getBitStringsForClosestBin(targetProb, bits):
+    """ We have a target probability and this methods returns
+        the binary encodings (results of measurements after QAE)
+        of the bins that correspond closest to the target probability.
+    """
+    allCombos=allBits(bits)
+    currentBest=allCombos[0]
+    currentDiff=abs(bit2prob(allCombos[0])-targetProb)
+    for x in allCombos:
+        if abs(bit2prob(x)-targetProb)<currentDiff:
+            currentBest=x
+            currentDiff=abs(bit2prob(x)-targetProb)
+    res=[currentBest]
+    y=complementBitstring(currentBest)
+    if not(y in res):
+        res.append(y)
+    return res

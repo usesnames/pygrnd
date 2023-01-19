@@ -12,7 +12,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.'''
 
-from setuptools import setup
+from setuptools import setup, find_packages
 
 setup(
     name='pygrnd',
@@ -20,10 +20,17 @@ setup(
     description='A Python library for quantum algorithms and software',
     url='https://github.com/JoSQUANTUM/pygrnd',
     author='JoS QUANTUM',
+    author_email='contact@jos-quantum.de',
     license='Apache 2.0',
     zip_safe=False,
     include_package_data=True,
-    packages=['pygrnd'],
+    packages= find_packages(),
+    install_requires=['qiskit',
+                      'numpy',
+                      'dimod',
+                      'dwave-greedy',
+                      'pennylane'
+                      ],
     classifiers=[
         'Programming Language :: Python :: 3',
         'License :: OSI Approved :: Apache Software License',

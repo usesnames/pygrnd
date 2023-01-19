@@ -14,6 +14,8 @@ limitations under the License.'''
 
 import numpy as np
 import math
+from qiskit.circuit.library import XGate, ZGate
+from qiskit import QuantumCircuit, QuantumRegister
 
 def num2bin(x,r):
     res=""
@@ -68,3 +70,67 @@ def showQAEoutput(counts,STATELIST,QAEqubits):
     probTail=math.sin(bin2num(maxString(counts))*math.pi/(2**QAEqubits))**2
     print("The probability of the tail event ",STATELIST," is: ",probTail)
     return probTail
+
+def addPower2(qr, qc, power, qubits):
+    """ Add the gates on the register that correspond to the addition of 2^power.
+    """
+    for i in range(power,qubits)[::-1]:
+        controls=[qr[j] for j in range(power,i+1)]
+        if len(controls)==1:
+            qc.x(controls)
+        else:
+            qc.append(XGate().control(num_ctrl_qubits=len(controls)-1),controls)
+
+def addValue(qr,qc,value):
+    """ Add the gates on the register that correspond to the addition of value.
+    """
+    bits=num2bin(value,len(qr))
+    power=0
+    for x in bits[::-1]:
+        if x=='1':
+            addPower2(qr, qc, power, len(qr))
+        power=power+1
+
+def subtractPower2(qr, qc, power, qubits):
+    """ Add the gates on the register that correspond to the subtraction of 2^power.
+    """
+    for i in range(power,qubits):
+        controls=[qr[j] for j in range(power,i+1)]
+        if len(controls)==1:
+            qc.x(controls)
+        else:
+            qc.append(XGate().control(num_ctrl_qubits=len(controls)-1),controls)
+
+def subtractValue(qr,qc,value):
+    """ Add the gates on the register that correspond to the subtraction of
+        the specified value.
+    """
+    bits=num2bin(value,len(qr))
+    power=0
+    for x in bits[::-1]:
+        if x=='1':
+            subtractPower2(qr, qc, power, len(qr))
+        power=power+1
+
+def complementBitstring(x):
+    """ For a bitstring that corresponds to a bin of QAE return
+        the other bitstring with the same probability. It might
+        be the same if there is only one.
+    """
+    xDec=bin2num(x)
+    yDec=2**len(x)-xDec
+    yBin=num2bin(yDec,len(x))
+    return yBin
+
+def getMinusMarkerGate(qubits):
+    """ Get the phase gate of the Grover operator that
+        marks all states with -1 except for the 0..0 state.
+    """
+    qr=QuantumRegister(qubits,'q')
+    qc=QuantumCircuit(qr)
+    qc.x(qr[0])
+    qc.append(ZGate().control(num_ctrl_qubits=qubits-1,ctrl_state='0'*(qubits-1)),qr[1:]+[qr[0]])
+    qc.x(qr[0])
+    phaseGate=qc.to_gate()
+    phaseGate.label='ph'
+    return phaseGate
